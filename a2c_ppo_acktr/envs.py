@@ -5,6 +5,9 @@ import numpy as np
 import torch
 from gym.spaces.box import Box
 
+import robosuite
+from robosuite.wrappers import GymWrapper
+
 from baselines import bench
 from baselines.common.atari_wrappers import make_atari, wrap_deepmind
 from baselines.common.vec_env import VecEnvWrapper
@@ -28,10 +31,36 @@ try:
 except ImportError:
     pass
 
+class GymGymWrapper(GymWrapper):
+    def seed(self, seed):
+        pass
+    @property    
+    def spec(self):
+        return None
+    @property
+    def reward_range(self):
+        return (0., 2.5)
+    @property
+    def metadata(self):
+        return {}
+    
+    
 
 def make_env(env_id, seed, rank, log_dir, allow_early_resets):
     def _thunk():
-        if env_id.startswith("dm"):
+        if env_id.startswith("Sawyer"):
+            env = robosuite.make(env_id, 
+                has_renderer=False, 
+                has_offscreen_renderer=False,
+                ignore_done=False,
+                horizon=200,
+                use_camera_obs=False,
+                gripper_visualization=False,
+                reward_shaping=True,
+                control_freq=10, # 100
+            )
+            env = GymGymWrapper(env)
+        elif env_id.startswith("dm"):
             _, domain, task = env_id.split('.')
             env = dm_control2gym.make(domain_name=domain, task_name=task)
         else:

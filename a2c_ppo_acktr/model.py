@@ -13,7 +13,7 @@ class Flatten(nn.Module):
 
 
 class Policy(nn.Module):
-    def __init__(self, obs_shape, action_space, base=None, base_kwargs=None):
+    def __init__(self, obs_shape, ac_shape, base=None, base_kwargs=None):
         super(Policy, self).__init__()
         if base_kwargs is None:
             base_kwargs = {}
@@ -27,17 +27,20 @@ class Policy(nn.Module):
 
         self.base = base(obs_shape[0], **base_kwargs)
 
-        if action_space.__class__.__name__ == "Discrete":
-            num_outputs = action_space.n
-            self.dist = Categorical(self.base.output_size, num_outputs)
-        elif action_space.__class__.__name__ == "Box":
-            num_outputs = action_space.shape[0]
-            self.dist = DiagGaussian(self.base.output_size, num_outputs)
-        elif action_space.__class__.__name__ == "MultiBinary":
-            num_outputs = action_space.shape[0]
-            self.dist = Bernoulli(self.base.output_size, num_outputs)
-        else:
-            raise NotImplementedError
+        num_outputs = ac_shape[0]
+        self.dist = DiagGaussian(self.base.output_size, num_outputs)
+
+        # if action_space.__class__.__name__ == "Discrete":
+        #     num_outputs = action_space.n
+        #     self.dist = Categorical(self.base.output_size, num_outputs)
+        # elif action_space.__class__.__name__ == "Box":
+        #     num_outputs = action_space.shape[0]
+        #     self.dist = DiagGaussian(self.base.output_size, num_outputs)
+        # elif action_space.__class__.__name__ == "MultiBinary":
+        #     num_outputs = action_space.shape[0]
+        #     self.dist = Bernoulli(self.base.output_size, num_outputs)
+        # else:
+        #     raise NotImplementedError
 
     @property
     def is_recurrent(self):
@@ -48,8 +51,17 @@ class Policy(nn.Module):
         """Size of rnn_hx."""
         return self.base.recurrent_hidden_state_size
 
-    def forward(self, inputs, rnn_hxs, masks):
-        raise NotImplementedError
+    # def forward(self, inputs, rnn_hxs, masks):
+    #     raise NotImplementedError
+
+    def forward(self, inputs, deterministic=False):
+        actor_features = self.base.forward_actor(inputs)
+        dist = self.dist(actor_features)
+        if deterministic:
+            action = dist.mode()
+        else:
+            action = dist.sample()
+        return action
 
     def act(self, inputs, rnn_hxs, masks, deterministic=False):
         value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
@@ -77,6 +89,11 @@ class Policy(nn.Module):
         dist_entropy = dist.entropy().mean()
 
         return value, action_log_probs, dist_entropy, rnn_hxs
+
+    def log_probs(self, inputs, actions):
+        actor_features = self.base.forward_actor(inputs)
+        dist = self.dist(actor_features)
+        return dist.log_probs(actions)
 
 
 class NNBase(nn.Module):
@@ -194,6 +211,10 @@ class CNNBase(NNBase):
 
         return self.critic_linear(x), x, rnn_hxs
 
+    def forward_actor(self, inputs):
+        assert not self.is_recurrent
+        return self.main(inputs / 255.0)
+
 
 class MLPBase(NNBase):
     def __init__(self, num_inputs, recurrent=False, hidden_size=64):
@@ -227,3 +248,7 @@ class MLPBase(NNBase):
         hidden_actor = self.actor(x)
 
         return self.critic_linear(hidden_critic), hidden_actor, rnn_hxs
+
+    def forward_actor(self, inputs):
+        assert not self.is_recurrent
+        return self.actor(inputs)

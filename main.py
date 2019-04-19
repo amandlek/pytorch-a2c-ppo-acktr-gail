@@ -32,12 +32,12 @@ class PPOConfig(Dict):
     def __init__(self):
 
         self.algo = 'ppo'
-        self.env_name = 'Hopper-v2' #'Hopper-v2' # environment to train on
+        self.env_name = 'HalfCheetah-v2' #'Hopper-v2' # environment to train on
         self.seed = 1 # random seed
         self.num_processes = 1 # number of CPU processes to use
 
         self.num_env_steps = 10e6 # total number of environment steps to train
-        self.num_steps = 200 #2048 # env steps per epoch of training
+        self.num_steps = 2048 # env steps per epoch of training
         self.use_proper_time_limits = False #True # compute returns, taking time limits into account
 
         self.cuda = True # whether to use CUDA
@@ -64,7 +64,7 @@ class PPOConfig(Dict):
         self.log_interval = 1 #10 # log interval, 1 log per n updates
         # self.save_interval = 100 # save interval, 1 save per n updates
         self.eval_interval = None # eval interval, 1 eval per n updates
-        self.log_dir = './training_logs'
+        self.log_dir = './some_logs'
         # self.save_dir = './trained_models/'
 
         self.experiment.base_path = "./experiments"

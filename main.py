@@ -32,12 +32,12 @@ class PPOConfig(Dict):
     def __init__(self):
 
         self.algo = 'ppo'
-        self.env_name = 'HalfCheetah-v2' #'Hopper-v2' # environment to train on
+        self.env_name = 'SawyerLift' #'Hopper-v2' # environment to train on
         self.seed = 1 # random seed
         self.num_processes = 1 # number of CPU processes to use
 
         self.num_env_steps = 10e6 # total number of environment steps to train
-        self.num_steps = 2048 # env steps per epoch of training
+        self.num_steps = 1000 #10000 #2048 # env steps per epoch of training
         self.use_proper_time_limits = False #True # compute returns, taking time limits into account
 
         self.cuda = True # whether to use CUDA
@@ -49,6 +49,8 @@ class PPOConfig(Dict):
         self.eps = 1e-5 # RMSprop optimizer epsilon
         self.alpha = 0.99 # RMSprop optimizer alpha
         self.use_linear_lr_decay = True # linear schedule on the learning rate
+
+        self.initial_logstd = -3. # 0. # used for initializing logstd parameter
 
         self.gamma = 0.99 # discount factor
         self.use_gae = True # generalized advantage estimation
@@ -70,6 +72,7 @@ class PPOConfig(Dict):
         self.experiment.base_path = "./experiments"
         self.experiment.output_dir = "./trained_models"
         self.experiment.name = "test_ppo"
+        self.experiment.model = "" # path to previous trained model
 
     def dump(self, filename=None):
         """
@@ -91,10 +94,16 @@ def main():
         "--name",
         type=str,
     )
+    parser.add_argument(
+        "--agent",
+        type=str,
+        default='',
+    )
     cmd_args = parser.parse_args()
 
     args = PPOConfig()
     args.experiment.name = cmd_args.name
+    args.experiment.model = cmd_args.agent
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -123,14 +132,44 @@ def main():
     torch.set_num_threads(1)
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
-    envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
-                         args.gamma, args.log_dir, device, False)
+    # envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
+    #                      args.gamma, args.log_dir, device, False)
+
+    if args.env_name.startswith("Sawyer"):
+        import robosuite
+        from robosuite.wrappers import GymWrapper
+        envs = robosuite.make(args.env_name, 
+            has_renderer=False, 
+            has_offscreen_renderer=False,
+            ignore_done=False,
+            horizon=1000,#1000,#200,
+            use_camera_obs=False,
+            gripper_visualization=False,
+            reward_shaping=True,
+            control_freq=100#10, # 100
+        )
+        envs = GymWrapper(envs)
+    elif args.env_name.startswith("dm"):
+        _, domain, task = args.env_name.split('.')
+        envs = dm_control2gym.make(domain_name=domain, task_name=task)
+    else:
+        envs = gym.make(args.env_name)
 
     actor_critic = Policy(
         envs.observation_space.shape,
-        envs.action_space,
+        envs.action_space.shape,
         base_kwargs={'recurrent': args.recurrent_policy})
     actor_critic.to(device)
+
+    if len(args.experiment.model):
+        # load config used during training
+        if not torch.cuda.is_available():
+            model_dict = torch.load(args.experiment.model, map_location=lambda storage, loc: storage)
+        else:
+            model_dict = torch.load(args.experiment.model)
+        actor_critic.load_state_dict(model_dict['policy'])
+    torch.nn.init.constant_(actor_critic.dist.logstd._bias, args.initial_logstd)
+    print("Initial logstd: {}".format(actor_critic.dist.logstd._bias))
 
     agent = algo.PPO(
             actor_critic,
@@ -187,7 +226,12 @@ def main():
                               envs.observation_space.shape, envs.action_space,
                               actor_critic.recurrent_hidden_state_size)
 
-    obs = envs.reset()
+    envs.reset()
+    envs.set_robot_joint_positions([0, -1.18, 0.00, 2.18, 0.00, 0.57, 1.5708])
+    obs = envs._get_observation()
+    obs = np.concatenate([obs["robot-state"], obs["object-state"]])
+    obs = np.array([obs])
+    obs = torch.from_numpy(obs).float().to(device)
     rollouts.obs[0].copy_(obs)
     rollouts.to(device)
 
@@ -198,6 +242,7 @@ def main():
     num_updates = int(
         args.num_env_steps) // args.num_steps // args.num_processes
     total_episodes = 0
+    total_reward = 0.
     for j in range(num_updates):
 
         epoch_start = time.time()
@@ -218,20 +263,42 @@ def main():
                     rollouts.masks[step])
 
             # Obser reward and next obs
-            obs, reward, done, infos = envs.step(action)
+            # if isinstance(action, torch.LongTensor):
+            #     # Squeeze the dimension for discrete actions
+            #     action = action.squeeze(1)
+            action_env = action.squeeze().cpu().numpy()
+            obs, reward, done, infos = envs.step(action_env)
+            obs = torch.from_numpy(np.array([obs])).float().to(device)
+            done = [done]
+            reward = torch.from_numpy(np.array([reward])).unsqueeze(dim=1).float()
 
-            for info in infos:
-                if 'episode' in info.keys():
-                    episode_rewards.append(info['episode']['r'])
-                    writer.add_scalar('Train/Rollouts', info['episode']['r'], total_episodes)
-                    total_episodes += 1
+            total_reward += reward.item()
+            if done[0]:
+                episode_rewards.append(total_reward)
+                writer.add_scalar('Train/Rollouts', total_reward, total_episodes)
+                print("Episode {} Return: {}".format(total_episodes, total_reward))
+                total_episodes += 1
+                total_reward = 0.
+                obs = envs.reset()
+                envs.set_robot_joint_positions([0, -1.18, 0.00, 2.18, 0.00, 0.57, 1.5708])
+                obs = envs._get_observation()
+                obs = np.concatenate([obs["robot-state"], obs["object-state"]])
+                obs = torch.from_numpy(np.array([obs])).float().to(device)
+
+            # for info in infos:
+            #     if 'episode' in info.keys():
+            #         episode_rewards.append(info['episode']['r'])
+            #         writer.add_scalar('Train/Rollouts', info['episode']['r'], total_episodes)
+            #         total_episodes += 1
 
             # If done then clean the history of observations.
             masks = torch.FloatTensor(
                 [[0.0] if done_ else [1.0] for done_ in done])
+            # bad_masks = torch.FloatTensor(
+            #     [[0.0] if 'bad_transition' in info.keys() else [1.0]
+            #      for info in infos])
             bad_masks = torch.FloatTensor(
-                [[0.0] if 'bad_transition' in info.keys() else [1.0]
-                 for info in infos])
+                [[1.0]])
             rollouts.insert(obs, recurrent_hidden_states, action,
                             action_log_prob, value, reward, masks, bad_masks)
 

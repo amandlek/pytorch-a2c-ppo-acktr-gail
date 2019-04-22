@@ -87,7 +87,11 @@ class DiagGaussian(nn.Module):
             zeros = zeros.cuda()
 
         action_logstd = self.logstd(zeros)
+
         return FixedNormal(action_mean, action_logstd.exp())
+
+    def mean_only(self, x):
+        return F.tanh(self.fc_mean(x))
 
 
 class Bernoulli(nn.Module):

@@ -53,11 +53,11 @@ def make_env(env_id, seed, rank, log_dir, allow_early_resets):
                 has_renderer=False, 
                 has_offscreen_renderer=False,
                 ignore_done=False,
-                horizon=200,
+                horizon=1000,#200,
                 use_camera_obs=False,
                 gripper_visualization=False,
                 reward_shaping=True,
-                control_freq=10, # 100
+                control_freq=100#10, # 100
             )
             env = GymGymWrapper(env)
         elif env_id.startswith("dm"):

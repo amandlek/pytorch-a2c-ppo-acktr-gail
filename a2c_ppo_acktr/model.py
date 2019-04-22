@@ -62,6 +62,7 @@ class Policy(nn.Module):
         else:
             action = dist.sample()
         return action
+        # return self.mean_only(inputs)
 
     def act(self, inputs, rnn_hxs, masks, deterministic=False):
         value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
@@ -94,6 +95,10 @@ class Policy(nn.Module):
         actor_features = self.base.forward_actor(inputs)
         dist = self.dist(actor_features)
         return dist.log_probs(actions)
+
+    def mean_only(self, inputs):
+        actor_features = self.base.forward_actor(inputs)
+        return self.dist.mean_only(actor_features)
 
 
 class NNBase(nn.Module):
@@ -217,6 +222,7 @@ class CNNBase(NNBase):
 
 
 class MLPBase(NNBase):
+    # def __init__(self, num_inputs, recurrent=False, hidden_size=64):
     def __init__(self, num_inputs, recurrent=False, hidden_size=64):
         super(MLPBase, self).__init__(recurrent, num_inputs, hidden_size)
 

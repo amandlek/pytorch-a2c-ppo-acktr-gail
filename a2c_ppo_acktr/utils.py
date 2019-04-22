@@ -33,6 +33,8 @@ class AddBias(nn.Module):
     def __init__(self, bias):
         super(AddBias, self).__init__()
         self._bias = nn.Parameter(bias.unsqueeze(1))
+        # if initial_value is not None:
+        #     nn.init.constant(self._bias, initial_value)
 
     def forward(self, x):
         if x.dim() == 2:
